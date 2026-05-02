@@ -1,22 +1,36 @@
 const router = require('express').Router();
-const Note = require('../models/Note');
-const auth = require('../middleware/auth');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/gcp');
+const auth   = require('../middleware/auth');
 
-// All routes require auth
 router.use(auth);
 
-// GET all notes for user
+// Each user's notes live at: notes/{userId}/items/{noteId}
+const col = (uid) => db.collection('notes').doc(uid).collection('items');
+
+// GET all notes
 router.get('/', async (req, res) => {
   try {
-    const notes = await Note.find({ user: req.user.id }).sort({ updatedAt: -1 });
-    res.json(notes);
+    const snap = await col(req.user.id).orderBy('updatedAt', 'desc').get();
+    res.json(snap.docs.map(d => d.data()));
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
 // POST create note
 router.post('/', async (req, res) => {
   try {
-    const note = await Note.create({ user: req.user.id, ...req.body });
+    const id  = uuidv4();
+    const now = new Date().toISOString();
+    const note = {
+      _id:       id,
+      user:      req.user.id,
+      title:     req.body.title   || 'Untitled Note',
+      content:   req.body.content || '',
+      color:     req.body.color   || '#fef08a',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await col(req.user.id).doc(id).set(note);
     res.status(201).json(note);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
@@ -24,20 +38,23 @@ router.post('/', async (req, res) => {
 // PATCH update note
 router.patch('/:id', async (req, res) => {
   try {
-    const note = await Note.findOneAndUpdate(
-      { _id: req.params.id, user: req.user.id },
-      req.body,
-      { new: true }
-    );
-    if (!note) return res.status(404).json({ message: 'Note not found' });
-    res.json(note);
+    const ref  = col(req.user.id).doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ message: 'Note not found' });
+
+    const updates = { updatedAt: new Date().toISOString() };
+    ['title', 'content', 'color'].forEach(k => {
+      if (req.body[k] !== undefined) updates[k] = req.body[k];
+    });
+    await ref.update(updates);
+    res.json({ ...snap.data(), ...updates });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
 // DELETE note
 router.delete('/:id', async (req, res) => {
   try {
-    await Note.findOneAndDelete({ _id: req.params.id, user: req.user.id });
+    await col(req.user.id).doc(req.params.id).delete();
     res.json({ message: 'Deleted' });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });

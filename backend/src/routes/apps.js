@@ -1,10 +1,9 @@
 const router = require('express').Router();
-const Desktop = require('../models/Desktop');
-const auth = require('../middleware/auth');
+const { db } = require('../config/gcp');
+const auth   = require('../middleware/auth');
 
 router.use(auth);
 
-// All available apps in the store
 const ALL_APPS = [
   { id: 'filemanager', name: 'File Manager', icon: '📁', description: 'Browse and manage your files' },
   { id: 'notes',       name: 'Notes',        icon: '📝', description: 'Create and edit notes' },
@@ -13,33 +12,31 @@ const ALL_APPS = [
   { id: 'calculator',  name: 'Calculator',   icon: '🧮', description: 'Simple calculator' },
   { id: 'clock',       name: 'Clock',        icon: '🕐', description: 'World clock and timer' },
   { id: 'browser',     name: 'Web Browser',  icon: '🌐', description: 'Browse the web' },
-  { id: 'terminal',    name: 'Terminal',     icon: '💻', description: 'Command line interface' }
+  { id: 'terminal',    name: 'Terminal',     icon: '💻', description: 'Command line interface' },
 ];
 
 // GET all apps with enabled status
 router.get('/', async (req, res) => {
   try {
-    const desktop = await Desktop.findOne({ user: req.user.id });
-    const enabled = desktop?.enabledApps || ['filemanager', 'notes', 'settings', 'appstore'];
-    const apps = ALL_APPS.map(a => ({ ...a, enabled: enabled.includes(a.id) }));
-    res.json(apps);
+    const snap    = await db.collection('desktops').doc(req.user.id).get();
+    const enabled = snap.exists ? (snap.data().enabledApps || []) : ['filemanager', 'notes', 'settings', 'appstore'];
+    res.json(ALL_APPS.map(a => ({ ...a, enabled: enabled.includes(a.id) })));
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// PATCH toggle app enabled/disabled
+// PATCH toggle app
 router.patch('/:appId/toggle', async (req, res) => {
   try {
-    const desktop = await Desktop.findOne({ user: req.user.id });
-    let enabled = desktop?.enabledApps || [];
+    const ref  = db.collection('desktops').doc(req.user.id);
+    const snap = await ref.get();
+    let enabled = snap.exists ? (snap.data().enabledApps || []) : [];
+
     const { appId } = req.params;
+    enabled = enabled.includes(appId)
+      ? enabled.filter(a => a !== appId)
+      : [...enabled, appId];
 
-    if (enabled.includes(appId)) {
-      enabled = enabled.filter(a => a !== appId);
-    } else {
-      enabled.push(appId);
-    }
-
-    await Desktop.findOneAndUpdate({ user: req.user.id }, { enabledApps: enabled }, { upsert: true });
+    await ref.set({ enabledApps: enabled }, { merge: true });
     res.json({ enabledApps: enabled });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
