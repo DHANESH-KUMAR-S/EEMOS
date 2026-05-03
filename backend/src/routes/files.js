@@ -19,12 +19,16 @@ const col = (uid) => db.collection('files').doc(uid).collection('items');
 router.get('/', async (req, res) => {
   try {
     const folder = req.query.folder || '/';
-    const snap   = await col(req.user.id)
-      .where('folder', '==', folder)
-      .orderBy('createdAt', 'desc')
-      .get();
-    res.json(snap.docs.map(d => d.data()));
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    // Fetch all user files then filter in memory — avoids composite index requirement
+    const snap = await col(req.user.id).orderBy('createdAt', 'desc').get();
+    const files = snap.docs
+      .map(d => d.data())
+      .filter(f => f.folder === folder);
+    res.json(files);
+  } catch (err) {
+    console.error('GET /files error:', err.message);
+    res.status(500).json({ message: err.message });
+  }
 });
 
 // ── POST /api/files/upload ────────────────────────────────────────────────────
@@ -40,12 +44,10 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     const gcsFile  = bucket.file(gcsPath);
 
     // Upload buffer to GCS
+    // Bucket has uniform public read access — no per-object ACL needed
     await gcsFile.save(req.file.buffer, {
       metadata: { contentType: req.file.mimetype },
     });
-
-    // Make the file publicly readable so we can serve it directly
-    await gcsFile.makePublic();
 
     const publicUrl = `https://storage.googleapis.com/${bucket.name}/${gcsPath}`;
     const now       = new Date().toISOString();

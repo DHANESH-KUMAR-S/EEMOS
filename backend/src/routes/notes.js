@@ -11,9 +11,16 @@ const col = (uid) => db.collection('notes').doc(uid).collection('items');
 // GET all notes
 router.get('/', async (req, res) => {
   try {
-    const snap = await col(req.user.id).orderBy('updatedAt', 'desc').get();
-    res.json(snap.docs.map(d => d.data()));
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    // Get all then sort in memory — avoids needing a Firestore composite index
+    const snap = await col(req.user.id).get();
+    const notes = snap.docs
+      .map(d => d.data())
+      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    res.json(notes);
+  } catch (err) {
+    console.error('GET /notes error:', err.message);
+    res.status(500).json({ message: err.message });
+  }
 });
 
 // POST create note
